@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +32,82 @@ import (
 	"sigs.k8s.io/karpenter/pkg/test"
 	"sigs.k8s.io/karpenter/test/pkg/environment/common"
 )
+
+// memoryMonitor tracks peak memory usage during a test
+type memoryMonitor struct {
+	env        *common.Environment
+	peakMemory float64
+	mu         sync.RWMutex
+	stopChan   chan struct{}
+	doneChan   chan struct{}
+}
+
+// startMemoryMonitor begins tracking Karpenter's memory usage
+func startMemoryMonitor(env *common.Environment) *memoryMonitor {
+	m := &memoryMonitor{
+		env:      env,
+		stopChan: make(chan struct{}),
+		doneChan: make(chan struct{}),
+	}
+	go m.monitor()
+	return m
+}
+
+// monitor continuously tracks memory usage
+func (m *memoryMonitor) monitor() {
+	defer close(m.doneChan)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopChan:
+			return
+		case <-ticker.C:
+			memory := getKarpenterMemoryUsage(m.env)
+			if memory > 0 {
+				m.mu.Lock()
+				if memory > m.peakMemory {
+					m.peakMemory = memory
+				}
+				m.mu.Unlock()
+			}
+		}
+	}
+}
+
+// stop halts monitoring and returns peak memory
+func (m *memoryMonitor) stop() float64 {
+	close(m.stopChan)
+	<-m.doneChan
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.peakMemory
+}
+
+// getKarpenterMemoryUsage queries the Karpenter controller pod's current memory usage in MB
+func getKarpenterMemoryUsage(env *common.Environment) float64 {
+	pod := env.ExpectActiveKarpenterPod()
+	if pod == nil {
+		return 0
+	}
+
+	// Get memory usage from pod status
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if containerStatus.Name == "controller" {
+			// Try to get metrics from Prometheus
+			metrics := env.ExpectPodMetrics()
+			for _, metric := range metrics {
+				if metric.Name == "container_memory_working_set_bytes" &&
+					metric.Labels["pod"] == pod.Name &&
+					metric.Labels["container"] == "controller" {
+					return metric.Value / (1024 * 1024) // Convert bytes to MB
+				}
+			}
+		}
+	}
+	return 0
+}
 
 // OutputPerformanceReport outputs a performance report to console and file
 func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
@@ -46,6 +123,9 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 	GinkgoWriter.Printf("Efficiency Score: %.1f%%\n", report.ResourceEfficiencyScore)
 	GinkgoWriter.Printf("Pods per Node: %.1f\n", report.PodsPerNode)
 	GinkgoWriter.Printf("Rounds: %d\n", report.Rounds)
+	if report.KarpenterPeakMemoryMB > 0 {
+		GinkgoWriter.Printf("Karpenter Peak Memory: %.2f MB\n", report.KarpenterPeakMemoryMB)
+	}
 
 	// File output
 	if outputDir := os.Getenv("OUTPUT_DIR"); outputDir != "" {
@@ -73,6 +153,9 @@ func OutputPerformanceReport(report *PerformanceReport, filePrefix string) {
 func ReportScaleOut(env *common.Environment, testName string, expectedPods int, timeout time.Duration) (*PerformanceReport, error) {
 	startTime := time.Now()
 
+	// Start monitoring memory
+	memMonitor := startMemoryMonitor(env)
+
 	// Wait for all pods to be healthy
 	allPodsSelector := labels.SelectorFromSet(map[string]string{test.DiscoveryLabel: "unspecified"})
 	if expectedPods > 0 {
@@ -80,6 +163,9 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 	}
 
 	totalTime := time.Since(startTime)
+
+	// Stop memory monitoring and get peak
+	peakMemory := memMonitor.stop()
 
 	// Collect metrics
 	nodeCount := env.Monitor.CreatedNodeCount()
@@ -106,6 +192,7 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 		ResourceEfficiencyScore: resourceEfficiencyScore,
 		PodsPerNode:             podsPerNode,
 		Rounds:                  1, // Scale-out is always 1 round
+		KarpenterPeakMemoryMB:   peakMemory,
 		Timestamp:               time.Now(),
 	}, nil
 }
@@ -125,6 +212,9 @@ func ReportScaleOut(env *common.Environment, testName string, expectedPods int, 
 func ReportConsolidation(env *common.Environment, testName string, initialPods, finalPods, initialNodes int, timeout time.Duration) (*PerformanceReport, error) {
 	startTime := time.Now()
 
+	// Start monitoring memory
+	memMonitor := startMemoryMonitor(env)
+
 	// Wait for pods to scale down first
 	allPodsSelector := labels.SelectorFromSet(map[string]string{test.DiscoveryLabel: "unspecified"})
 	if finalPods > 0 {
@@ -135,6 +225,9 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 	consolidationRounds, _ := monitorConsolidationRounds(env, timeout)
 
 	totalTime := time.Since(startTime)
+
+	// Stop memory monitoring and get peak
+	peakMemory := memMonitor.stop()
 
 	// Collect final metrics
 	finalNodes := env.Monitor.CreatedNodeCount()
@@ -161,6 +254,7 @@ func ReportConsolidation(env *common.Environment, testName string, initialPods, 
 		ResourceEfficiencyScore: resourceEfficiencyScore,
 		PodsPerNode:             podsPerNode,
 		Rounds:                  len(consolidationRounds),
+		KarpenterPeakMemoryMB:   peakMemory,
 		Timestamp:               time.Now(),
 	}, nil
 }

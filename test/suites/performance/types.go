@@ -44,5 +44,6 @@ type PerformanceReport struct {
 	ResourceEfficiencyScore float64       `json:"resource_efficiency_score"`
 	PodsPerNode             float64       `json:"pods_per_node"`
 	Rounds                  int           `json:"rounds"`
+	KarpenterPeakMemoryMB   float64       `json:"karpenter_peak_memory_mb"`
 	Timestamp               time.Time     `json:"timestamp"`
 }
