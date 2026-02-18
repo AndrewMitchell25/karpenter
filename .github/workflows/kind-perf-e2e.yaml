@@ -2,7 +2,7 @@ name: kind-perf-e2e
 on:
   push:
     branches: [main]
-  pull_request: # TODO: Remove after testing
+  pull_request: # TODO: Remove after testing is done
   workflow_run:
     workflows:
       - ApprovalComment
