@@ -93,6 +93,7 @@ func (l *Launch) launchNodeClaim(ctx context.Context, nodeClaim *v1.NodeClaim) (
 			})
 			return nil, nil
 		case cloudprovider.IsNodeClassNotReadyError(err):
+			l.recorder.Publish(NodeClassNotReadyEvent(nodeClaim, err))
 			log.FromContext(ctx).Error(err, "failed launching nodeclaim")
 			if err = l.kubeClient.Delete(ctx, nodeClaim); err != nil {
 				return nil, client.IgnoreNotFound(err)
@@ -104,6 +105,7 @@ func (l *Launch) launchNodeClaim(ctx context.Context, nodeClaim *v1.NodeClaim) (
 			})
 			return nil, nil
 		default:
+			l.recorder.Publish(LaunchFailedEvent(nodeClaim, err))
 			var createError *cloudprovider.CreateError
 			if errors.As(err, &createError) {
 				nodeClaim.StatusConditions().SetUnknownWithReason(v1.ConditionTypeLaunched, createError.ConditionReason, createError.ConditionMessage)

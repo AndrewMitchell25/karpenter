@@ -49,4 +49,5 @@ const (
 	InsufficientCapacityError = "InsufficientCapacityError"
 	UnregisteredTaintMissing  = "UnregisteredTaintMissing"
 	NodeClassNotReady         = "NodeClassNotReady"
+	LaunchFailedError         = "LaunchFailedError"
 )

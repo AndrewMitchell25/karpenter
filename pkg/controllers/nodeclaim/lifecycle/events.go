@@ -45,6 +45,16 @@ func NodeClassNotReadyEvent(nodeClaim *v1.NodeClaim, err error) events.Event {
 	}
 }
 
+func LaunchFailedEvent(nodeClaim *v1.NodeClaim, err error) events.Event {
+	return events.Event{
+		InvolvedObject: nodeClaim,
+		Type:           corev1.EventTypeWarning,
+		Reason:         events.LaunchFailedError,
+		Message:        fmt.Sprintf("NodeClaim %s event: %s", nodeClaim.Name, truncateMessage(err.Error())),
+		DedupeValues:   []string{string(nodeClaim.UID)},
+	}
+}
+
 func UnregisteredTaintMissingEvent(nodeClaim *v1.NodeClaim) events.Event {
 	return events.Event{
 		InvolvedObject: nodeClaim,

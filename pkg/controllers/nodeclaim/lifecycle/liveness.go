@@ -51,7 +51,7 @@ type Liveness struct {
 const (
 	registrationTimeout       = time.Minute * 15
 	registrationTimeoutReason = "registration_timeout"
-	launchTimeout             = time.Minute * 5
+	launchTimeout             = time.Second * 45
 	launchTimeoutReason       = "launch_timeout"
 )
 
